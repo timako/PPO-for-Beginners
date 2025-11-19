@@ -47,7 +47,7 @@ class PPO:
 		self.critic = policy_class(self.obs_dim, 1)
 
 		# Initialize optimizers for actor and critic
-		self.actor_optim = Adam(self.actor.parameters(), lr=self.lr)
+		self.actor_optim = self._init_actor_optimizer()
 		self.critic_optim = Adam(self.critic.parameters(), lr=self.lr)
 
 		# Initialize the covariance matrix used to query the actor for actions
@@ -96,6 +96,9 @@ class PPO:
 			V, _ = self.evaluate(batch_obs, batch_acts)
 			A_k = batch_rtgs - V.detach()                                                                       # ALG STEP 5
 
+			# Allow subclasses to inspect temporal-difference style errors for structure control
+			self._monitor_td_error(batch_obs, A_k)
+
 			# One of the only tricks I use that isn't in the pseudocode. Normalizing advantages
 			# isn't theoretically necessary, but in practice it decreases the variance of 
 			# our advantages and makes convergence much more stable and faster. I added this because
@@ -139,6 +142,9 @@ class PPO:
 
 				# Log actor loss
 				self.logger['actor_losses'].append(actor_loss.detach())
+
+			# Allow subclasses to prune or refresh their structure after weight updates
+			self._metabolize_structures()
 
 			# Print a summary of our training so far
 			self._log_summary()
@@ -355,6 +361,35 @@ class PPO:
 			# Set the seed 
 			torch.manual_seed(self.seed)
 			print(f"Successfully set seed to {self.seed}")
+
+
+	def _init_actor_optimizer(self):
+		"""
+		Create the optimizer responsible for updating the actor side of the algorithm.
+
+		Subclasses can override this to incorporate extra parameters (for example,
+		gating networks or specialist modules). The base PPO implementation only
+		optimizes the actor itself.
+		"""
+		return Adam(self.actor.parameters(), lr=self.lr)
+
+	def _monitor_td_error(self, batch_obs, td_errors):
+		"""
+		Hook for subclasses to examine TD-style errors and trigger structural changes.
+
+		The default PPO implementation does not react to these signals, but classes
+		like DSPPO can override the method to grow or gate additional modules when
+		persistent high-error regions are observed.
+		"""
+		return None
+
+	def _metabolize_structures(self):
+		"""
+		Hook for subclasses to prune or decay dynamically created structures.
+
+		The base implementation is a no-op.
+		"""
+		return None
 
 	def _log_summary(self):
 		"""
