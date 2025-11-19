@@ -6,6 +6,8 @@ those errors persist, gating between base and specialist policies, and pruning
 modules that remain inactive.
 """
 
+from collections import deque
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -26,8 +28,15 @@ class DSPPO(PPO):
 
                 # Growth controls
                 self.td_error_growth_threshold = getattr(self, "td_error_growth_threshold", 1.0)
+                self.min_iterations_before_growth = getattr(self, "min_iterations_before_growth", 2)
+                self.growth_window = getattr(self, "growth_window", 5)
+                self.growth_cooldown = getattr(self, "growth_cooldown", 5)
                 self.specialist_width = getattr(self, "specialist_width", 64)
                 self.verbose_growth = getattr(self, "verbose_growth", True)
+
+                # Growth state trackers
+                self._recent_td_errors = deque(maxlen=self.growth_window)
+                self._last_growth_iter = -float("inf")
 
                 # Gating controls
                 self.gating_hidden_dim = getattr(self, "gating_hidden_dim", 64)
@@ -83,7 +92,20 @@ class DSPPO(PPO):
                         return None
 
                 max_error = torch.max(torch.abs(td_errors)).item()
-                if max_error < self.td_error_growth_threshold:
+                self._recent_td_errors.append(max_error)
+
+                # Require a few iterations of signal accumulation before reacting
+                if len(self._recent_td_errors) < self.growth_window:
+                        return None
+
+                # Do not grow too early or too frequently
+                if self.logger.get("i_so_far", 0) < self.min_iterations_before_growth:
+                        return None
+                if self.logger.get("i_so_far", 0) - self._last_growth_iter < self.growth_cooldown:
+                        return None
+
+                avg_error = np.mean(self._recent_td_errors)
+                if avg_error < self.td_error_growth_threshold:
                         return None
 
                 error_index = torch.argmax(torch.abs(td_errors)).item()
@@ -98,6 +120,7 @@ class DSPPO(PPO):
                 )
                 self.specialist_modules.append(new_specialist)
                 self.specialist_activity.append(0)
+                self._last_growth_iter = self.logger.get("i_so_far", 0)
 
                 # refresh optimizer so new parameters receive gradients
                 self.actor_optim = self._init_actor_optimizer()

@@ -17,9 +17,11 @@ theoretical ideas you shared:
 - The class lives in [`ds_ppo.py`](ds_ppo.py) and subclasses the baseline
   [`PPO`](ppo.py) implementation.
 - Growth triggers inside `_monitor_td_error`, called once per PPO iteration
-  (see the hook in `PPO.learn`). When the maximum absolute TD-style error in the
-  batch exceeds `td_error_growth_threshold`, a new `nn.Sequential` specialist is
-  appended and the actor optimizer refreshes so its parameters are trained.
+  (see the hook in `PPO.learn`). The trainer accumulates recent TD-error maxima
+  and only grows when the rolling average stays above
+  `td_error_growth_threshold` after a short warmup and cooldown window. When a
+  trigger fires, a new `nn.Sequential` specialist is appended and the actor
+  optimizer refreshes so its parameters are trained.
 - Gating: `_policy_mean` mixes the base actor output with the mean output of all
   specialists using a sigmoid gating network. The gating parameters train along
   with the actor because the optimizer includes them.
@@ -29,8 +31,14 @@ theoretical ideas you shared:
 
 ## Key hyperparameters
 
-- `td_error_growth_threshold` (default `1.0`): Error magnitude needed to spawn a
-  specialist.
+- `td_error_growth_threshold` (default `1.0`): Rolling-average TD-error needed
+  to spawn a specialist.
+- `growth_window` (default `5`): Number of recent iterations used to smooth the
+  TD-error signal.
+- `min_iterations_before_growth` (default `2`): Warmup iterations before any
+  growth is allowed.
+- `growth_cooldown` (default `5`): Minimum iterations to wait between growth
+  events to reduce early runaway spawning.
 - `specialist_width` (default `64`): Hidden size of each specialist module.
 - `gating_hidden_dim` (default `64`): Width of the gating network.
 - `specialist_activation_threshold` (default `0.35`): Activity signal required
